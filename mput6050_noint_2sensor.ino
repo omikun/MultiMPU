@@ -3,7 +3,8 @@
 #include "MPU6050_6Axis_MotionApps20.h"
 #include "Wire.h"
 
-const int numSensors = 2;
+#define MICRO true //get time in micros instead of millis
+const int numSensors = 3;
 
 MPU6050 mpu;
 //MPU6050 mpu(0x69); // 0x69 address, must set AD0 to high to use
@@ -16,6 +17,19 @@ long lastTime;
 float ypr[numSensors][3*numSensors];
 #define SENSOR0 2  //AD0 for sensor 0
 
+#if MICRO
+  const long sampleInterval = 40000;
+#else
+  const long sampleInterval = 40;
+#endif
+long time()
+{
+#if MICRO
+  return micros();
+#else
+  return millis();
+#endif
+}
 void setup() {
 
     Wire.begin();
@@ -24,7 +38,7 @@ void setup() {
     Serial.begin(115200);
     while (!Serial); // wait for Leonardo enumeration, others continue immediately
 
-    for (int i=0; i<2; i++)
+    for (int i=0; i<numSensors; i++)
     {
       pinMode(SENSOR0+i, OUTPUT);
       digitalWrite(i, HIGH);
@@ -53,7 +67,6 @@ void setup() {
     packetSize = mpu.dmpGetFIFOPacketSize();
     fifoCount = mpu.getFIFOCount();
 
-    lastTime = micros();
     /*
 // wait for ready
     Serial.println(F("\nSend any character to begin DMP programming and demo: "));
@@ -65,8 +78,10 @@ void setup() {
     {
       digitalWrite(i+SENSOR0, LOW);
       mpu.resetFIFO();
-      digitalWrite(i, HIGH);
+      digitalWrite(i+SENSOR0, HIGH);
     }
+    
+    lastTime = time();
 }
 
 void InitMPU()
@@ -106,10 +121,8 @@ void InitMPU()
         Serial.print(devStatus);
         Serial.println(F(")"));
     }
-
-    
-
 }
+
 int it = 0;
 long pt = 0;
 void loop() {
@@ -117,9 +130,9 @@ void loop() {
     long dt = 0;
     int steps = 0;
     //wait for #ms: 30ms ~8000 loop iteration
-    while(dt < 40)
+    while(dt < sampleInterval)
     {
-        timeNow = micros();
+        timeNow = time();
         dt = timeNow - lastTime;
         steps++;
     }
@@ -135,7 +148,7 @@ void loop() {
       count[i] = fifoCount;
       
       if (fifoCount < packetSize) {
-        return;//continue;
+        continue;
       }
 
       if (fifoCount >= packetSize) {
@@ -153,18 +166,18 @@ void loop() {
       
       digitalWrite(i+SENSOR0, HIGH);
     }
-    timeNow = micros();
+    timeNow = time();
     long st = timeNow - lastTime;
     long lastTime2 = timeNow;
     
     Serial.print(timeNow);
-    Serial.print(" wait steps: ");
+    Serial.print(" steps: ");
     Serial.print(steps);
     
-    Serial.print(" sample time: ");
+    Serial.print(" st: ");
     Serial.print(st);
     
-    Serial.print(" last print time: ");
+    Serial.print(" lpt: ");
     Serial.print(pt);
     ///*
     for (int i=0; i<numSensors; i++)
@@ -172,7 +185,7 @@ void loop() {
       Serial.print("\t fifoCount: ");
       Serial.print(count[i]);
 #if true
-      Serial.print("\t q\t");
+      Serial.print("\t q ");
       Serial.print(q[i].w);
       Serial.print(" ");
       Serial.print(q[i].x);
@@ -191,6 +204,6 @@ void loop() {
     }
     //*/
     Serial.println();
-    timeNow = micros();
+    timeNow = time();
     pt = timeNow - lastTime2;
 }
