@@ -13,10 +13,10 @@
 
 #define MPU true
 #define MICRO true //get time in micros instead of millis
-const int numSensors = 2;
+const int numSensors = 1;
 
 MPU6050 mpu;
-//MPU6050 mpu(0x69); // 0x69 address, must set AD0 to high to use
+MPU6050 mpu2(0x69); // 0x69 address, must set AD0 to high to use
 uint16_t packetSize;
 uint16_t fifoCount;
 uint8_t fifoBuffer[64];
@@ -26,7 +26,7 @@ long lastTime;
 float ypr[numSensors][3*numSensors];
 
 #if MICRO
-  const long sampleInterval = 45000;
+  const long sampleInterval = 30000;//45000;
 #else
   const long sampleInterval = 40;
 #endif
@@ -86,6 +86,7 @@ void setup() {
     {
       EnableSensor(i);
       mpu.resetFIFO();
+      mpu2.resetFIFO();
     }
 #endif
     Serial.println("Setup complete");
@@ -97,29 +98,42 @@ void InitMPU()
   // initialize device
     Serial.println(F("Initializing I2C devices..."));
     mpu.initialize();
+    mpu2.initialize();
 
     // verify connection
     Serial.println(F("Testing device connections..."));
-    Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
-
+    Serial.println(mpu.testConnection() ? F("MPU6050 1 connection successful") : F("MPU6050 1 connection failed"));
+    Serial.println(mpu2.testConnection() ? F("MPU6050 2 connection successful") : F("MPU6050 2 connection failed"));
     // load and configure the DMP
     Serial.println(F("Initializing DMP..."));
     uint8_t devStatus = mpu.dmpInitialize();
+    uint8_t devStatus2 = mpu2.dmpInitialize();
 
     // supply your own gyro offsets here, scaled for min sensitivity
     mpu.setXGyroOffset(220);
     mpu.setYGyroOffset(76);
     mpu.setZGyroOffset(-85);
     mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
+// supply your own gyro offsets here, scaled for min sensitivity
+    mpu2.setXGyroOffset(220);
+    mpu2.setYGyroOffset(76);
+    mpu2.setZGyroOffset(-85);
+    mpu2.setZAccelOffset(1788); // 1688 factory default for my test chip
 
-    // make sure it worked (returns 0 if so)
+    CheckMPUStatus(devStatus, &mpu);
+    CheckMPUStatus(devStatus2, &mpu2);
+}
+
+void CheckMPUStatus(uint8_t devStatus, MPU6050 * mpu)
+{
+  // make sure it worked (returns 0 if so)
     if (devStatus == 0) {
         // turn on the DMP, now that it's ready
         Serial.println(F("Enabling DMP..."));
-        mpu.setDMPEnabled(true);
+        mpu->setDMPEnabled(true);
 
         // get expected DMP packet size for later comparison
-        packetSize = mpu.dmpGetFIFOPacketSize();
+        packetSize = mpu->dmpGetFIFOPacketSize();
     } else {
         // ERROR!
         // 1 = initial memory load failed
@@ -130,7 +144,6 @@ void InitMPU()
         Serial.println(F(")"));
     }
 }
-
 int it = 0;
 long pt = 0;
 long iteration = 0;
@@ -180,7 +193,8 @@ void loop() {
     }
     if (!checkFIFO)
     {
-      printData(steps, count);
+      printBinary(steps, count);
+      //printData(steps, count);
     } else {
       //test when fifo out of alignment
       bool printFlag = false;
@@ -206,6 +220,28 @@ void loop() {
     iteration++;
 }
 
+void printBinary(long steps, int *count) {
+  for (int i=0; i<numSensors; i++)
+    {
+      if (true)
+      {
+        Serial.print(q[i].w);
+        Serial.print(",");
+        Serial.print(q[i].x);
+        Serial.print(",");
+        Serial.print(q[i].y);
+        Serial.print(",");
+        Serial.print(q[i].z);
+        Serial.print(",");
+      } else {
+        Serial.write((byte*)&(q[i].w),4);
+        Serial.write((byte*)&(q[i].x),4);
+        Serial.write((byte*)&(q[i].y),4);
+        Serial.write((byte*)&(q[i].z),4);
+        }
+    }
+    Serial.println();
+}
 void printData(long steps, int *count) {
     
     long timeNow = time();
