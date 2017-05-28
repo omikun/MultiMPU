@@ -13,18 +13,19 @@
 
 #define MPU true
 #define MICRO true //get time in micros instead of millis
-const int numSensors = 1;
+const int numSensors = 2;
 
-MPU6050 mpu;
+MPU6050 mpu(0x68);
 MPU6050 mpu2(0x69); // 0x69 address, must set AD0 to high to use
 uint16_t packetSize;
 uint16_t fifoCount;
-uint8_t fifoBuffer[64];
 Quaternion q[numSensors];
 VectorFloat gravity;
 long lastTime;
 float ypr[numSensors][3*numSensors];
 
+int8_t numEnabledMPUs = 0; //for use when printing (not enabled MPU's not sampled)
+uint16_t count[numSensors]; //size of FIFOqueue per sensor
 #if MICRO
   const long sampleInterval = 30000;//45000;
 #else
@@ -39,6 +40,7 @@ long time()
   return millis();
 #endif
 }
+bool EnabledMPU[numSensors];
 
 void EnableSensor(int i)
 {
@@ -49,6 +51,7 @@ void EnableSensor(int i)
   digitalWrite(DATA3, i & 0x8);
   digitalWrite(STROBE, LOW);
 }
+
 void setup() {
 
     Wire.begin();
@@ -64,13 +67,19 @@ void setup() {
     pinMode(DATA3, OUTPUT);
     digitalWrite(STROBE, LOW);
 
-    for (int i=0; i<numSensors; i++)
+    for (int i=0; i<numSensors; i+=2)
     {
-      EnableSensor(i);
+      EnableSensor(i/2);
 #if MPU
-      InitMPU();
+      EnabledMPU[i] = InitMPU(i, &mpu);
+      if (i+1 < numSensors)
+      {
+        EnabledMPU[i+1] = InitMPU(i+1, &mpu2);
+      }
+      numEnabledMPUs += EnabledMPU[i] + EnabledMPU[i+1];
 #endif
     }
+    
     //packetSize = mpu.dmpGetFIFOPacketSize();
     //fifoCount = mpu.getFIFOCount();
 
@@ -82,49 +91,44 @@ void setup() {
     while (Serial.available() && Serial.read()); // empty buffer again
 */
 #if MPU
-    for (int i=0; i<numSensors; i++)
+    for (int i=0; i<numSensors; i+=2)
     {
-      EnableSensor(i);
+      EnableSensor(i/2);
       mpu.resetFIFO();
       mpu2.resetFIFO();
     }
 #endif
-    Serial.println("Setup complete");
+    String msgSetupComplete = "Setup complete: " + String(numEnabledMPUs);
+    Serial.println(msgSetupComplete);
     lastTime = time();
 }
 
-void InitMPU()
+bool InitMPU(int i, MPU6050 * mpu)
 {
   // initialize device
     Serial.println(F("Initializing I2C devices..."));
-    mpu.initialize();
-    mpu2.initialize();
+    mpu->initialize();
 
     // verify connection
     Serial.println(F("Testing device connections..."));
-    Serial.println(mpu.testConnection() ? F("MPU6050 1 connection successful") : F("MPU6050 1 connection failed"));
-    Serial.println(mpu2.testConnection() ? F("MPU6050 2 connection successful") : F("MPU6050 2 connection failed"));
+    String connectStatus = "MPU6050 " + String(i) + " connection ";
+    connectStatus += mpu->testConnection() ? "successful" : "failed";
+    Serial.println( connectStatus);
+    
     // load and configure the DMP
     Serial.println(F("Initializing DMP..."));
-    uint8_t devStatus = mpu.dmpInitialize();
-    uint8_t devStatus2 = mpu2.dmpInitialize();
+    uint8_t devStatus = mpu->dmpInitialize();
 
     // supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(220);
-    mpu.setYGyroOffset(76);
-    mpu.setZGyroOffset(-85);
-    mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
+    mpu->setXGyroOffset(220);
+    mpu->setYGyroOffset(76);
+    mpu->setZGyroOffset(-85);
+    mpu->setZAccelOffset(1788); // 1688 factory default for my test chip
 // supply your own gyro offsets here, scaled for min sensitivity
-    mpu2.setXGyroOffset(220);
-    mpu2.setYGyroOffset(76);
-    mpu2.setZGyroOffset(-85);
-    mpu2.setZAccelOffset(1788); // 1688 factory default for my test chip
-
-    CheckMPUStatus(devStatus, &mpu);
-    CheckMPUStatus(devStatus2, &mpu2);
+    return CheckMPUStatus(devStatus, mpu);
 }
 
-void CheckMPUStatus(uint8_t devStatus, MPU6050 * mpu)
+bool CheckMPUStatus(uint8_t devStatus, MPU6050 * mpu)
 {
   // make sure it worked (returns 0 if so)
     if (devStatus == 0) {
@@ -134,6 +138,7 @@ void CheckMPUStatus(uint8_t devStatus, MPU6050 * mpu)
 
         // get expected DMP packet size for later comparison
         packetSize = mpu->dmpGetFIFOPacketSize();
+        return true;
     } else {
         // ERROR!
         // 1 = initial memory load failed
@@ -142,8 +147,41 @@ void CheckMPUStatus(uint8_t devStatus, MPU6050 * mpu)
         Serial.print(F("DMP Initialization failed (code "));
         Serial.print(devStatus);
         Serial.println(F(")"));
+        return false;
     }
 }
+
+void ReadMPU(bool checkFIFO, int i, MPU6050 * mpu)
+{
+    #if MPU
+    uint8_t fifoBuffer[64];
+    if (checkFIFO)
+    {
+        fifoCount = mpu->getFIFOCount();
+        count[i] = fifoCount;
+
+        if (false && fifoCount < packetSize) {
+            return;
+        }
+
+        if (true || fifoCount >= packetSize) {
+            mpu->getFIFOBytes(fifoBuffer,packetSize);
+            fifoCount -= packetSize;
+        }
+        mpu->dmpGetQuaternion(&q[i],fifoBuffer);
+        mpu->dmpGetGravity(&gravity,&q[i]);
+        mpu->dmpGetYawPitchRoll(ypr[i],&q[i],&gravity);          
+
+    } else {
+        mpu->getFIFOBytes(fifoBuffer,14);//packetSize);
+        mpu->dmpGetQuaternion(&q[i],fifoBuffer);
+    }
+
+    mpu->resetFIFO();
+#endif
+
+}
+
 int it = 0;
 long pt = 0;
 long iteration = 0;
@@ -161,35 +199,18 @@ void loop() {
     
     lastTime = timeNow;
 
-      bool checkFIFO = false;
-    uint16_t count[numSensors];
-    for (int i=0; i<numSensors; i++)
+    bool checkFIFO = false;
+    for (int i=0; i<numSensors; i+=2)
     {
-      EnableSensor(i);
-      //delay(500);
-#if MPU
-      if (checkFIFO)
+      EnableSensor(i/2);
+      if (EnabledMPU[i])
+          ReadMPU(checkFIFO, i, &mpu);
+      if (i+1 < numSensors)
       {
-        fifoCount = mpu.getFIFOCount();
-        count[i] = fifoCount;
-        
-        if (false && fifoCount < packetSize) {
-          continue;
-        }
-  
-        if (true || fifoCount >= packetSize) {
-            mpu.getFIFOBytes(fifoBuffer,14);//packetSize);
-            //fifoCount -= packetSize;
-        }
-      } else {
-        mpu.getFIFOBytes(fifoBuffer,14);//packetSize);
+        if (EnabledMPU[i+1])
+          ReadMPU(checkFIFO, i, &mpu2);
       }
-  
-      mpu.dmpGetQuaternion(&q[i],fifoBuffer);
-      //mpu.dmpGetGravity(&gravity,&q[i]);
-      //mpu.dmpGetYawPitchRoll(ypr[i],&q[i],&gravity);          
-      mpu.resetFIFO();
-#endif
+      //delay(500);
     }
     if (!checkFIFO)
     {
@@ -221,7 +242,7 @@ void loop() {
 }
 
 void printBinary(long steps, int *count) {
-  for (int i=0; i<numSensors; i++)
+  for (int i=0; i<numEnabledMPUs; i++)
     {
       if (true)
       {
